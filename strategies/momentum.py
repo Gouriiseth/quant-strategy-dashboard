@@ -260,7 +260,7 @@ class MomentumStrategy(BaseStrategy):
             "Max Weight per Stock %", 8, 25, 15) / 100
         self.atr_mult   = st.sidebar.slider(
             "ATR Stop Multiplier", 2.0, 6.0, 4.5, 0.5,
-            help="Wider = fewer false stops. v7 default 4.5 (was 3.5).")
+            help="Wider = fewer false stops. Default 4.5.")
 
         st.sidebar.markdown("---")
         st.sidebar.markdown("**Rebalance Frequency**")
@@ -272,7 +272,7 @@ class MomentumStrategy(BaseStrategy):
         )
 
         st.sidebar.markdown("---")
-        st.sidebar.markdown("**v7 Fixes**")
+        st.sidebar.markdown("**Signal Enhancements**")
         self.use_dual_momentum = st.sidebar.checkbox(
             "Dual Momentum Gate",
             value=True,
@@ -684,7 +684,7 @@ class MomentumStrategy(BaseStrategy):
     # DISPLAY
     # ──────────────────────────────────────────────────────────────
     def run(self):
-        with st.spinner("Running Momentum v7.1 backtest (~1-2 min)..."):
+        with st.spinner("Running Momentum backtest (~1-2 min)..."):
             raw_result = self._run(
                 self.start_date, self.end_date, self.top_n,
                 self.lookback, self.skip_last, self.max_weight,
@@ -702,18 +702,6 @@ class MomentumStrategy(BaseStrategy):
             result, err = raw_result, None
         else:
             result, err = None, f"Unexpected return: {type(raw_result)}"
-
-        # Debug expander
-        with st.expander("🛠 Debug Info (expand if backtest fails)"):
-            import sys
-            st.caption(f"Python {sys.version.split()[0]} | "
-                       f"pandas {pd.__version__} | yfinance {_yf_version} | "
-                       f"FREQ_ME={FREQ_ME} FREQ_YE={FREQ_YE}")
-            for line in run_log:
-                st.error(line) if "❌" in line else st.success(line)
-            if not run_log:
-                st.info("Cached result — click 🗑 Clear Cache in sidebar to re-run fresh.")
-            if err: st.error(f"Error: {err}")
 
         if result is None:
             st.error(f"❌ {err}")
@@ -783,7 +771,7 @@ class MomentumStrategy(BaseStrategy):
         bn_ri = bn.reindex(ps.index).ffill()
         fig1  = go.Figure()
         fig1.add_trace(go.Scatter(x=ps.index, y=ps.values,
-                                  name="Momentum v7.1",
+                                  name="Momentum Strategy",
                                   line=dict(color="#1565C0", width=2.5)))
         fig1.add_trace(go.Scatter(x=bn.index, y=bn.values,
                                   name="Nifty 50 B&H",
@@ -1086,35 +1074,42 @@ class MomentumStrategy(BaseStrategy):
         else:
             st.warning(f"⚠️ Stop-loss rate {m['Stop Rate']:.1f}% — try ATR Multiplier 5.0")
 
-        with st.expander("📖 v7 → v7.1 Changes (just the bug fix)"):
-            st.markdown("""
-**v7.1 is a hotfix release.** No signal logic changed — your backtest numbers
-will be byte-identical to v7.
+        with st.expander("📖 Strategy Architecture & Signal Logic"):
+            st.markdown(f"""
+**Dual Momentum Gate**
 
-**The crash**
+Each stock must beat Nifty's own 12-month return (not just beat 0%).
+This eliminates stocks that are rising purely because the whole market is rising
+("tide-lifters"), keeping only genuine relative outperformers.
+The blend slider (0 = pure absolute, 1 = pure relative) lets you adjust how
+aggressively the gate is applied.
 
-```
-ValueError: Invalid value of type 'builtins.str' received for the
-'fillcolor' property of scatter
-Received value: '#2E7D3255'
-```
+**Tiered Regime Filter**
 
-**Why it happened**
+Instead of a binary 0%/100% invested switch, exposure scales across 5 levels
+based on how far Nifty sits from its 200-day moving average:
 
-In the regime-exposure chart, the old v7 code did:
-```python
-fillcolor = color + "55"   # '#2E7D32' + '55' → '#2E7D3255'
-```
-That's an **8-digit RGBA hex**. Plotly only accepts 6-digit hex,
-`rgb()`, `rgba()`, `hsl()`, `hsv()`, or named colours — so it rejects
-the 8-digit form and raises `ValueError`.
+| Gap from 200DMA | Exposure |
+|---|---|
+| ≥ 0% | 100% — full bull |
+| -2% to 0% | 80% — slight caution |
+| -5% to -2% | 60% — moderate caution |
+| -10% to -5% | 40% — defensive |
+| < -10% | 20% — near-cash |
 
-**The fix**
+This prevents the strategy from missing recovery rallies that follow short dips.
 
-- All `fillcolor=` values now go through `_hex_to_rgba(hex, alpha)`
-  which produces a proper `rgba(r,g,b,a)` string.
-- The regime chart was rebuilt as one always-defined step-area trace
-  with background tier bands drawn as `add_hrect` shapes — no NaN
-  gaps, no per-tier `fill='tozeroy'` traces. This is the same robust
-  pattern used in `trend_following` v2.8.
+**Blended Inv-Vol + Momentum Weights**
+
+Position sizing combines:
+- 60% inverse-volatility (lower-vol stocks get more capital)
+- 40% momentum score (higher-momentum stocks get more capital)
+
+This balances risk distribution with return potential.
+
+**ATR Trailing Stop**
+
+Each position has a stop set at `{self.atr_mult}× ATR` below its highest close since entry.
+Wider ATR multiplier = fewer false exits in volatile markets.
 """)
+
